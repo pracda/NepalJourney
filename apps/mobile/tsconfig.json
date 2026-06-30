@@ -1,0 +1,9 @@
+{
+  "extends": "@nepal-journey/config/tsconfig/expo",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "app", "*.ts", "*.tsx"]
+}

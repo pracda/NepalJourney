@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─── Python API ─────────────────────────────────────────────────────────────
+  api:
+    name: API — lint + tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install poetry==1.8.2
+
+      - name: Cache Poetry venv
+        uses: actions/cache@v4
+        with:
+          path: api/.venv
+          key: poetry-${{ hashFiles('api/poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --no-root
+
+      - name: Lint (ruff)
+        run: poetry run ruff check .
+
+      - name: Type-check (mypy)
+        run: poetry run mypy . --ignore-missing-imports
+        continue-on-error: true  # mypy strict errors are warnings until type coverage is complete
+
+      - name: Run tests
+        env:
+          # Tests use fake backends — real keys not needed
+          SUPABASE_URL: "https://placeholder.supabase.co"
+          SUPABASE_ANON_KEY: "placeholder"
+          SUPABASE_SERVICE_ROLE_KEY: "placeholder"
+          JWT_SECRET: "test-secret"
+          JWT_ALGORITHM: "HS256"
+          ANTHROPIC_API_KEY: "placeholder"
+          OPENAI_API_KEY: "placeholder"
+          REDIS_URL: "redis://localhost:6379"
+        run: poetry run pytest tests/ -v --asyncio-mode=auto
+
+  # ─── TypeScript (packages + apps) ──────────────────────────────────────────
+  typescript:
+    name: TS — typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8.15.1
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build shared packages
+        run: pnpm --filter @nepal-journey/types build
+
+      - name: Typecheck packages/types
+        run: pnpm --filter @nepal-journey/types typecheck
+
+      - name: Typecheck apps/guide
+        run: pnpm --filter @nepal-journey/guide typecheck
+        continue-on-error: true  # Expo native types require full native env
+
+      - name: Typecheck apps/mobile
+        run: pnpm --filter @nepal-journey/mobile typecheck
+        continue-on-error: true
+
+      - name: Typecheck apps/web
+        run: pnpm --filter @nepal-journey/web typecheck
+
+      - name: Build web (Next.js)
+        run: pnpm --filter @nepal-journey/web build
+        env:
+          NEXT_PUBLIC_API_URL: "http://localhost:8000"
+          NEXT_PUBLIC_SUPABASE_URL: "https://placeholder.supabase.co"
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: "placeholder"

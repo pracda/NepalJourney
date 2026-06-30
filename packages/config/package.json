@@ -1,0 +1,33 @@
+{
+  "name": "@nepal-journey/config",
+  "version": "0.1.0",
+  "description": "Shared ESLint, TypeScript, and Tailwind base configs for the Nepal Journey platform",
+  "exports": {
+    "./eslint": "./eslint.js",
+    "./tsconfig": "./tsconfig.base.json",
+    "./tsconfig/expo": "./tsconfig.expo.json",
+    "./tsconfig/next": "./tsconfig.next.json",
+    "./tailwind": "./tailwind.base.js"
+  },
+  "files": [
+    "eslint.js",
+    "tsconfig.base.json",
+    "tsconfig.expo.json",
+    "tsconfig.next.json",
+    "tailwind.base.js"
+  ],
+  "dependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint-plugin-react": "^7.34.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-native": "^4.1.0"
+  },
+  "peerDependencies": {
+    "eslint": ">=8.0.0",
+    "typescript": ">=5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

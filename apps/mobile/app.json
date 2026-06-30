@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Nepal Journey",
+    "slug": "nepal-journey-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#DC143C"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nepaljourney.mobile",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "BridgeVoice uses your microphone to translate your voice in real time.",
+        "NSLocationWhenInUseUsageDescription": "Used to show your position on the trek map and share it with your guide during active treks.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Used to log GPS tracks even when the app is in the background."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#DC143C"
+      },
+      "package": "com.nepaljourney.mobile",
+      "permissions": [
+        "RECORD_AUDIO",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ]
+    },
+    "plugins": ["expo-router", "expo-secure-store", "expo-location", "expo-task-manager"],
+    "scheme": "nepal-journey",
+    "extra": {
+      "router": { "origin": false },
+      "eas": { "projectId": "your-eas-project-id" }
+    }
+  }
+}

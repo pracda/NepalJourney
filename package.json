@@ -1,0 +1,20 @@
+{
+  "name": "nepal-journey",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Nepal Journey AI - AI-powered travel platform connecting tourists, local guides, and the Nepal Tourism Board",
+  "scripts": {
+    "dev:mobile": "pnpm --filter @nepal-journey/mobile start",
+    "dev:guide": "pnpm --filter @nepal-journey/guide start",
+    "dev:web": "pnpm --filter @nepal-journey/web dev",
+    "build:web": "pnpm --filter @nepal-journey/web build",
+    "build:types": "pnpm --filter @nepal-journey/types build",
+    "lint": "pnpm -r --if-present lint",
+    "type-check": "pnpm -r --if-present type-check",
+    "test": "pnpm -r --if-present test"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "packageManager": "pnpm@8.15.1"
+}

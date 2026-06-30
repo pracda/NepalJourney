@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "Nepal Journey Guide",
+    "slug": "nepal-journey-guide",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#003893"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.nepaljourney.guide",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Yatra uses your microphone for voice registration and BridgeVoice translation.",
+        "NSCameraUsageDescription": "Used to capture your profile photo.",
+        "NSPhotoLibraryUsageDescription": "Used to select your profile photo.",
+        "NSLocationWhenInUseUsageDescription": "Used to share your live location during active treks."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#003893"
+      },
+      "package": "com.nepaljourney.guide",
+      "permissions": [
+        "RECORD_AUDIO",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": ["expo-router", "expo-secure-store"],
+    "scheme": "nepal-journey-guide",
+    "extra": {
+      "router": { "origin": false },
+      "eas": { "projectId": "your-eas-project-id" }
+    }
+  }
+}

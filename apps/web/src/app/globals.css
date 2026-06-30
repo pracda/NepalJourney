@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --nepal-blue: #003893;
+  --nepal-red: #DC143C;
+}
+
+body {
+  @apply bg-nepal-snow text-gray-900 antialiased;
+}
