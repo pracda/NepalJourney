@@ -77,6 +77,28 @@ async def match_guides(
     return {"guides": matches}
 
 
+@router.get("/{guide_id}/reviews")
+async def get_guide_reviews(
+    guide_id: str,
+    limit: int = Query(default=10, le=50),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Recent public reviews for a guide, newest first."""
+    supabase = get_user_scoped_supabase(current_user.access_token)
+    result = (
+        supabase.table("reviews")
+        .select(
+            "id, overall_rating, safety_rating, knowledge_rating, "
+            "communication_rating, punctuality_rating, comment, created_at"
+        )
+        .eq("guide_id", guide_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return {"reviews": result.data or []}
+
+
 @router.get("/{guide_id}")
 async def get_guide(guide_id: str, current_user: CurrentUser = Depends(get_current_user)) -> dict:
     cached = await get_cached_guide_detail(guide_id)

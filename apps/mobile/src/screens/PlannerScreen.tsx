@@ -15,12 +15,13 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useRouter } from "expo-router";
 import type { GuideMatchResult } from "@nepal-journey/types";
 import { matchGuides } from "@/api/client";
 
-function GuideCard({ guide }: { guide: GuideMatchResult }) {
+function GuideCard({ guide, onPress }: { guide: GuideMatchResult; onPress: () => void }) {
   return (
-    <View style={styles.card}>
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.95}>
       <View style={styles.cardTop}>
         {guide.photo_url ? (
           <Image source={{ uri: guide.photo_url }} style={styles.avatar} />
@@ -51,14 +52,15 @@ function GuideCard({ guide }: { guide: GuideMatchResult }) {
           </View>
         )}
       </View>
-      <TouchableOpacity style={styles.bookBtn}>
-        <Text style={styles.bookBtnText}>Book This Guide</Text>
-      </TouchableOpacity>
-    </View>
+      <View style={styles.bookBtn}>
+        <Text style={styles.bookBtnText}>View Profile & Book →</Text>
+      </View>
+    </TouchableOpacity>
   );
 }
 
 export default function PlannerScreen() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [guides, setGuides] = useState<GuideMatchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -116,7 +118,14 @@ export default function PlannerScreen() {
       <FlatList
         data={guides}
         keyExtractor={(g) => g.id}
-        renderItem={({ item }) => <GuideCard guide={item} />}
+        renderItem={({ item }) => (
+          <GuideCard
+            guide={item}
+            onPress={() =>
+              router.push({ pathname: "/guide/[id]", params: { id: item.id } })
+            }
+          />
+        )}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           searched ? (

@@ -167,6 +167,16 @@ export interface Booking {
   updated_at: ISODateString;
 }
 
+/** Booking row joined with the guide's display fields. Returned by GET /bookings. */
+export interface BookingWithGuide extends Booking {
+  guides: {
+    name: string;
+    photo_url: string | null;
+    location: string;
+    phone?: string;
+  } | null;
+}
+
 export interface CreateBookingRequest {
   guide_id: UUID;
   trip_id?: UUID;
@@ -328,6 +338,43 @@ export interface GuideMatchResult extends Pick<Guide,
 > {
   /** Cosine similarity score (0–1) from pgvector. Present in match results only. */
   similarity?: number;
+}
+
+// ─── Push tokens ─────────────────────────────────────────────────────────────
+
+export interface PushToken {
+  id: UUID;
+  user_id: UUID;
+  token: string;
+  platform: "ios" | "android" | "web";
+  created_at: ISODateString;
+}
+
+export interface RegisterPushTokenRequest {
+  token: string;
+  platform: "ios" | "android" | "web";
+}
+
+// ─── Guide detail (public, for tourist view) ──────────────────────────────────
+
+export interface GuideDetail extends Guide {
+  /** Only present when fetched via /guides/{id} — excluded from match results. */
+  phone: string | null;
+  availability_start: string | null;
+  availability_end: string | null;
+}
+
+export interface GuideReview {
+  id: UUID;
+  booking_id: UUID;
+  tourist_id: UUID;
+  overall_rating: number;
+  safety_rating: number | null;
+  knowledge_rating: number | null;
+  communication_rating: number | null;
+  punctuality_rating: number | null;
+  comment: string | null;
+  created_at: ISODateString;
 }
 
 // ─── API error shape ──────────────────────────────────────────────────────────

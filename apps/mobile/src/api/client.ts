@@ -1,10 +1,13 @@
 import * as SecureStore from "expo-secure-store";
 import type {
   ApiError,
-  Booking,
+  BookingWithGuide,
   CreateBookingRequest,
+  GuideDetail,
   GuideMatchResult,
+  GuideReview,
   GpsPoint,
+  RegisterPushTokenRequest,
   SosAlert,
   TranslateVoiceResponse,
   TranslateTextRequest,
@@ -42,10 +45,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ─── Guide matching ───────────────────────────────────────────────────────────
+// ─── Guide matching & discovery ───────────────────────────────────────────────
 
 export async function matchGuides(preferences: string): Promise<GuideMatchResult[]> {
-  return request(`/guides/match?preferences=${encodeURIComponent(preferences)}`);
+  const data = await request<{ guides: GuideMatchResult[] }>(
+    `/guides/match?preferences=${encodeURIComponent(preferences)}`
+  );
+  return data.guides ?? data as unknown as GuideMatchResult[];
 }
 
 export async function listGuides(params?: {
@@ -53,17 +59,50 @@ export async function listGuides(params?: {
   specialization?: string;
 }): Promise<GuideMatchResult[]> {
   const qs = new URLSearchParams(params as Record<string, string>).toString();
-  return request(`/guides${qs ? `?${qs}` : ""}`);
+  const data = await request<{ guides: GuideMatchResult[] }>(`/guides${qs ? `?${qs}` : ""}`);
+  return data.guides ?? [];
+}
+
+export async function getGuide(guideId: string): Promise<GuideDetail> {
+  return request<GuideDetail>(`/guides/${guideId}`);
+}
+
+export async function getGuideReviews(guideId: string, limit = 10): Promise<GuideReview[]> {
+  const data = await request<{ reviews: GuideReview[] }>(
+    `/guides/${guideId}/reviews?limit=${limit}`
+  );
+  return data.reviews ?? [];
 }
 
 // ─── Bookings ─────────────────────────────────────────────────────────────────
 
-export async function createBooking(payload: CreateBookingRequest): Promise<Booking> {
+export async function createBooking(payload: CreateBookingRequest): Promise<BookingWithGuide> {
   return request("/bookings", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export async function getMyBookings(): Promise<Booking[]> {
-  return request("/bookings");
+export async function getMyBookings(): Promise<BookingWithGuide[]> {
+  const data = await request<{ bookings: BookingWithGuide[] }>("/bookings");
+  return data.bookings ?? [];
+}
+
+export async function getBooking(bookingId: string): Promise<BookingWithGuide> {
+  return request(`/bookings/${bookingId}`);
+}
+
+export async function updateBookingStatus(
+  bookingId: string,
+  newStatus: string,
+): Promise<BookingWithGuide> {
+  return request(`/bookings/${bookingId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: newStatus }),
+  });
+}
+
+// ─── Push tokens ──────────────────────────────────────────────────────────────
+
+export async function registerPushToken(payload: RegisterPushTokenRequest): Promise<void> {
+  await request("/bookings/push-token", { method: "POST", body: JSON.stringify(payload) });
 }
 
 // ─── GPS tracking ─────────────────────────────────────────────────────────────

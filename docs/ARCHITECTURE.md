@@ -224,9 +224,51 @@ def _get_client() -> AsyncOpenAI:
 
 ---
 
+---
+
+## Stage 3 — Booking Flow Decisions
+
+### ADR-021: Server-side state machine enforcement + client-side optimistic update
+
+**Decision:** The booking state machine is enforced on the server (`routers/bookings.py`) using a `_TRANSITIONS` dict keyed by `(current_status, actor_role)`. The client applies the new status locally on success without re-fetching the full booking list.
+
+**Reasoning:** Server enforcement is the security boundary — a client that sends a crafted PATCH cannot skip the guide's confirmation step. The optimistic local update is a UX choice: avoiding a full list re-fetch after an Accept/Decline keeps the interaction snappy. If the server rejects the transition (422), the client reverts and shows an error.
+
+**Alternative considered:** Postgres row-level CHECK constraints for valid transitions. Rejected because transition rules depend on which party is acting (tourist vs. guide), which is application-layer context not visible to the database.
+
+---
+
+### ADR-022: Expo push via Expo's managed service, not direct FCM/APNs
+
+**Decision:** Push notifications are sent to Expo's Push API (`exp.host/--/api/v2/push/send`), not directly to FCM or APNs.
+
+**Reasoning:** Expo's service handles FCM/APNs credentials, device registration, and token format differences across platforms. For the early growth phase, the operational overhead of managing FCM + APNs credentials separately is not justified. Expo's service is free up to ~1M notifications/month.
+
+**Trade-off:** Adds a dependency on Expo's infrastructure. At scale (millions of notifications/day), migrate to direct FCM + APNs for lower latency and full control. The `tools/push.py` abstraction means this migration is a one-file change.
+
+---
+
+### ADR-023: Invalid push tokens deleted immediately on first failure
+
+**Decision:** When Expo returns `DeviceNotRegistered` or `InvalidCredentials` for a push token, `delete_push_token(token)` is called synchronously before the notification loop continues.
+
+**Reasoning:** Stale tokens accumulate if guides uninstall and reinstall the app (new token, old one orphaned). Deleting on first failure keeps the `push_tokens` table small and avoids repeatedly sending to dead tokens (which Expo rate-limits). The deletion is not critical-path — it's a maintenance operation; if it fails, the token stays and is retried next time.
+
+---
+
+### ADR-024: Supabase Realtime for live booking status
+
+**Decision:** Both apps subscribe to `postgres_changes` on the `bookings` table for live status updates.
+
+**Reasoning:** Push notifications wake the app but can be delayed or blocked. Realtime gives the in-app experience: the tourist's status badge flips from "Awaiting Guide" to "Confirmed" within ~1s of the guide's action, with no pull-to-refresh. At scale, Realtime connections consume Supabase resources — the Realtime subscription is unsubscribed on component unmount to avoid connection leaks.
+
+**What Realtime does NOT do here:** It doesn't replace push notifications. A push brings a sleeping user back to the app; Realtime updates the UI once the user is in the app.
+
+---
+
 ## Pending Decisions (to be recorded as stages progress)
 
-- **ADR-021:** Supabase Realtime integration for the SOS feed (WebSocket vs. SSE vs. polling)
-- **ADR-022:** Offline-first strategy for the tourist mobile app (AsyncStorage queue vs. MMKV vs. SQLite)
-- **ADR-023:** EAS Build + OTA update strategy for Expo apps
-- **ADR-024:** Trip planner agent design (whether to extend Yatra or build a separate LangGraph agent)
+- **ADR-025:** Offline-first strategy for the tourist mobile app (AsyncStorage queue vs. MMKV vs. SQLite)
+- **ADR-026:** EAS Build + OTA update strategy for Expo apps
+- **ADR-027:** Trip planner agent design (whether to extend Yatra or build a separate LangGraph agent)
+- **ADR-028:** Stripe Connect integration for guide payouts

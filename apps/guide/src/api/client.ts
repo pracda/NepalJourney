@@ -1,13 +1,14 @@
 import * as SecureStore from "expo-secure-store";
 import type {
   ApiError,
-  YatraChatResponse,
-  YatraMessage,
-  Booking,
+  BookingWithGuide,
   Guide,
+  RegisterPushTokenRequest,
   TranslateVoiceResponse,
   TranslateTextRequest,
   TranslateTextResponse,
+  YatraChatResponse,
+  YatraMessage,
 } from "@nepal-journey/types";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -75,8 +76,25 @@ export async function getMyProfile(): Promise<Guide> {
 
 // ─── Bookings ─────────────────────────────────────────────────────────────────
 
-export async function getMyBookings(): Promise<Booking[]> {
-  return request("/bookings");
+export async function getMyBookings(): Promise<BookingWithGuide[]> {
+  const data = await request<{ bookings: BookingWithGuide[] }>("/bookings");
+  return data.bookings ?? [];
+}
+
+export async function updateBookingStatus(
+  bookingId: string,
+  newStatus: string,
+): Promise<BookingWithGuide> {
+  return request(`/bookings/${bookingId}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: newStatus }),
+  });
+}
+
+// ─── Push tokens ──────────────────────────────────────────────────────────────
+
+export async function registerPushToken(payload: RegisterPushTokenRequest): Promise<void> {
+  await request("/bookings/push-token", { method: "POST", body: JSON.stringify(payload) });
 }
 
 // ─── Translation ──────────────────────────────────────────────────────────────
