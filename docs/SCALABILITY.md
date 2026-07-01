@@ -1,0 +1,192 @@
+# Scalability & Reliability Reference
+
+How Nepal Journey AI is designed to handle millions of requests/day — and what to upgrade when traffic grows beyond the current design's limits.
+
+---
+
+## 1. Current Capacity Model
+
+The system today is a single FastAPI process + single Redis instance + Supabase managed Postgres. For the demo and early traction phase (tens of concurrent users), this is the right starting point — premature distribution adds operational complexity with no benefit.
+
+The design choices below are forward-compatible with horizontal scaling: everything the app would need to split across instances (rate state, cache, session state) is already in Redis or Postgres, not in process memory.
+
+---
+
+## 2. Caching Strategy
+
+### 2.1 Guide listing (Redis, TTL = 30s)
+
+Guide discovery is the hottest read path on the tourist app. Without caching, every swipe through the guide list would hit Postgres with a parameterized query + an ilike filter.
+
+```
+Request → Redis GET guide:list:<sha1(params)>
+            ├── HIT:  return JSON, skip Postgres entirely
+            └── MISS: Postgres query → Redis SET (30s TTL) → return JSON
+```
+
+The 30-second TTL is intentionally short: a guide toggling availability (a common action before a trek) should be visible to tourists within half a minute, not hours.
+
+**Key format:** `guide:list:<12-char SHA1 of "location|specialization|available|limit">`. The SHA1 means unlimited filter combinations without key collisions and keeps key names short.
+
+### 2.2 Guide detail (Redis, TTL = 30s)
+
+Individual guide profile pages cache the full public profile. Cache is invalidated whenever a guide is approved, rejected, or updates their profile — `invalidate_guide(guide_id)` deletes the detail key and scans + deletes all list keys.
+
+### 2.3 Invalidation
+
+```python
+async def invalidate_guide(guide_id: str) -> None:
+    await redis.delete(f"guide:detail:{guide_id}")
+    async for key in redis.scan_iter("guide:list:*"):
+        await redis.delete(key)
+```
+
+`scan_iter` (cursor-based) is used instead of `KEYS guide:list:*` (blocks Redis event loop for the duration of the scan). At very high cardinality (100k+ guide-list cache keys), switch to a Redis Set that tracks which list-cache keys contain each guide_id — O(1) targeted invalidation instead of a full scan.
+
+### 2.4 Cache failures are non-fatal
+
+All Redis operations are wrapped in try/except. A Redis outage degrades to cache-miss behavior (every request hits Postgres) but never returns a 5xx to the user. This is deliberate: the cache is a performance optimization, not a correctness requirement.
+
+---
+
+## 3. LLM Circuit Breaker
+
+### 3.1 Why it exists
+
+LLM APIs (Anthropic Claude) have higher failure rates than typical HTTP services — 429 rate limits, 529 overloaded errors, and occasional 5-second latency spikes are normal. Without retry logic, a single transient error causes a visible failure in the guide's registration flow.
+
+### 3.2 Design
+
+```python
+async def with_llm_retry(coro_fn, *args, **kwargs):
+    for attempt in range(max_retries + 1):
+        try:
+            return await asyncio.wait_for(coro_fn(...), timeout=LLM_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError: ...
+        except Exception as exc:
+            if not _is_retryable(exc): raise  # 400, 401, 422 → don't retry
+            ...
+        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)  # jitter
+        await asyncio.sleep(delay)
+```
+
+**Exponential backoff with jitter** prevents a thundering herd when many concurrent registrations hit Claude after an outage. Without jitter, all retries would fire simultaneously and amplify the load spike.
+
+**Retryable:** 429, 500, 502, 503, 529, network errors.
+**Not retried:** 400 (bad request), 401 (auth), 422 (validation) — these are permanent failures that retrying can't fix.
+
+### 3.3 Future: half-open state in Redis
+
+The current implementation is a simple per-request retry loop, not a true circuit breaker with a half-open state. At millions of requests/day with multiple API instances, a persistent circuit breaker that tracks failure rate across instances should be stored in Redis (key: `cb:anthropic:state`, values: `closed/open/half-open`). This is marked as a TODO in `tools/llm_retry.py`.
+
+---
+
+## 4. Rate Limiting
+
+`RateLimitMiddleware` (Stage 0) applies per-IP limits backed by Redis:
+- Standard endpoints: configurable via `RATE_LIMIT_REQUESTS_PER_MINUTE`
+- AI endpoints (`/chat/*`, `/guides/match`): stricter limit via `AI_RATE_LIMIT_REQUESTS_PER_MINUTE`
+
+The limits are enforced by counting requests in a Redis sorted set with the timestamp as the score. Expired entries are trimmed on each check — no background job needed. At very high scale, replace with a token bucket or leaky bucket algorithm in Lua (executed atomically in Redis) to avoid the check-then-act race condition.
+
+---
+
+## 5. Request Correlation IDs
+
+Every request gets an `X-Request-ID` header (generated by `RequestIDMiddleware` if the client doesn't supply one). The ID is stored in a `contextvars.ContextVar` so it's accessible anywhere in the call stack without passing it through every function argument.
+
+```python
+request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+```
+
+All structured log lines include `request_id`, so a single failed guide approval can be traced across:
+- FastAPI access log
+- Admin router `guide_verified` log line
+- Email send attempt
+- Redis invalidation
+
+At scale, ship these JSON log lines to a centralized log aggregator (Loki, Datadog, CloudWatch) and set up a Sentry transaction trace per `X-Request-ID`.
+
+---
+
+## 6. Structured Access Logging
+
+`AccessLogMiddleware` emits one JSON log line per request:
+
+```json
+{
+  "request_id": "a1b2c3d4",
+  "method": "PATCH",
+  "path": "/admin/guides/uuid/verify",
+  "status": 200,
+  "duration_ms": 143,
+  "client_ip": "1.2.3.4",
+  "timestamp": "2026-06-30T..."
+}
+```
+
+Health check, docs, and OpenAPI endpoints are excluded (`SILENT_PATHS`) to avoid noise. At high volume, sample non-error logs (e.g., only emit 1% of 200s) to control log storage costs while keeping 100% of 4xx/5xx.
+
+---
+
+## 7. Audit Log Partitioning
+
+`admin_audit_log` is a range-partitioned table (`PARTITION BY RANGE (created_at)`) with a default partition active now. When the platform has been live for several months:
+
+1. Create a monthly partition: `CREATE TABLE admin_audit_log_2026_07 PARTITION OF admin_audit_log FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');`
+2. Archive old partitions to cold storage (S3 Glacier via Supabase pg_dump + S3 sink) after the compliance retention window (typically 7 years for financial/licensing decisions).
+3. Drop old partitions from Postgres — queries against `admin_audit_log WHERE created_at > now() - interval '1 year'` will benefit from partition pruning and never touch archived data.
+
+The append-only design (no UPDATE/DELETE RLS policies) means each partition is write-once after its time window closes — safe to archive without data integrity concerns.
+
+---
+
+## 8. Database Connection Management
+
+FastAPI + `supabase-py` creates synchronous Postgres connections per request (via PostgREST under the anon key, or direct via the service-role key). At high concurrency this exhausts connection limits.
+
+**Near-term fix:** Enable Supabase's PgBouncer transaction-mode pooler. Change the Supabase connection string from port 5432 (direct) to port 6543 (pooler). This multiplexes hundreds of FastAPI connections into a fixed pool without code changes.
+
+**Long-term:** Switch to `asyncpg` for direct async Postgres access in hot paths (guide listing, booking queries) to eliminate the PostgREST JSON serialization overhead.
+
+---
+
+## 9. Background Jobs
+
+Currently fire-and-forget tasks (email notifications) use `asyncio.get_event_loop().create_task()`. This is process-local — if the process crashes between creating the task and the coroutine completing, the email is lost.
+
+For production reliability, move fire-and-forget to a proper job queue:
+1. **Redis Queue / ARQ**: publish to a Redis stream; a worker process consumes it. Survives API process restarts.
+2. **Supabase Edge Functions + Webhooks**: trigger on `guides.verification_status` change via a Postgres trigger → pg_net HTTP call → Supabase Edge Function → Resend. Survives everything.
+
+For the current phase, the async task approach is acceptable — a lost notification email is a minor UX issue, not a data-loss event.
+
+---
+
+## 10. Horizontal Scaling Checklist
+
+When the single API instance becomes the bottleneck (CPU > 70% sustained or p99 latency > 2s):
+
+| What to scale | How |
+|---|---|
+| API instances | Deploy multiple containers behind a load balancer (Railway, Fly.io, or ECS). All instances share Redis + Supabase — no sticky sessions needed. |
+| Redis | Upgrade to Redis Cluster or Upstash with replicas. Update `REDIS_URL` to the cluster endpoint. |
+| Postgres | Supabase Pro already has read replicas. Route `GET` queries to replica via a second `SUPABASE_REPLICA_URL` env var. |
+| LLM throughput | Request a higher rate limit tier from Anthropic, or add OpenAI as a fallback in `with_llm_retry`. |
+| Email | Resend has high volume plans. The `fire_and_forget` pattern doesn't change; only the API key tier does. |
+| Circuit breaker | Implement half-open state in Redis (see §3.3). |
+| Rate limiter | Switch from sorted-set to Lua token bucket for atomic check-and-decrement. |
+
+---
+
+## 11. Observability Stack (Recommended)
+
+| Layer | Tool | What it captures |
+|---|---|---|
+| Errors | Sentry (already wired in `main.py`) | Exceptions + stack traces + request context |
+| Logs | Loki / Datadog | Structured JSON access logs (§6) |
+| Metrics | Prometheus + Grafana | Request rate, latency p50/p99, Redis hit rate, LLM retry rate |
+| Traces | OpenTelemetry → Jaeger | Cross-service traces keyed by `X-Request-ID` |
+| Uptime | Supabase health + `/health` probe | Redis + Supabase connectivity |
+
+The `/health` endpoint (added in Stage 2) already probes Redis and Supabase and returns latency for each. Wire this to an uptime monitor (Better Uptime, UptimeRobot) to get paged when either goes down.

@@ -150,10 +150,83 @@ def _get_client() -> AsyncOpenAI:
 
 ---
 
+---
+
+## Stage 2 — Reliability & Admin Decisions
+
+### ADR-014: Service-role key for admin mutations, not RLS write policies
+
+**Decision:** The FastAPI admin router (`routers/admin.py`) uses the service-role Supabase client (bypasses RLS) for mutations (approve/reject guide) rather than crafting RLS write policies for the `ntb_admin` role.
+
+**Reasoning:** RLS write policies for a privileged role are subtle to get right — a mistake silently grants too much or too little access. The FastAPI layer already enforces the role check explicitly via `require_admin_role()` before any data access. Using the service-role key for mutations keeps the authorization logic in one place (the router) rather than split between the router and the database policy. Reads still go through the user-scoped client where RLS applies.
+
+**Trade-off:** The service-role key must never leak. It is only used in server-to-server calls (API → Supabase), never returned to any client. This invariant is enforced by code review and the `get_admin_supabase()` docstring.
+
+---
+
+### ADR-015: Append-only audit log with partition-ready schema
+
+**Decision:** `admin_audit_log` is partitioned by `RANGE(created_at)` from day one, with no UPDATE or DELETE RLS policy.
+
+**Reasoning:** Audit logs must be tamper-evident for NTB compliance. Making rows immutable at the database layer (no policies that allow UPDATE/DELETE) is a stronger guarantee than application-layer enforcement. Partitioning by time is free to add now and makes future archival to cold storage (archive by dropping old partitions) trivially safe.
+
+**Cost:** Schema complexity slightly higher than a plain table. Mitigated by the default partition that handles all writes until we create time-specific partitions.
+
+---
+
+### ADR-016: Optimistic locking on guides.version
+
+**Decision:** Add `guides.version INTEGER DEFAULT 1`. Every UPDATE to `guides` includes `WHERE version = <client_version>` and increments version on success. Returns 409 if the row was modified concurrently.
+
+**Reasoning:** The NTB dashboard may have multiple admins. Without optimistic locking, Admin A could approve a guide, then Admin B (who loaded the page before the approval) could accidentally reject the same guide because they're operating on stale state. The 409 response tells Admin B to refresh and see the current state before acting.
+
+**Alternative considered:** Pessimistic locking (`SELECT FOR UPDATE`). Rejected because it holds a Postgres lock for the duration of the HTTP request (potentially seconds if the admin pauses before confirming), degrading concurrency for all guide reads.
+
+---
+
+### ADR-017: Request correlation IDs via ContextVar
+
+**Decision:** Use a `contextvars.ContextVar` to propagate the `X-Request-ID` through the async call stack without threading it through every function signature.
+
+**Reasoning:** In an async framework like FastAPI, `threading.local()` doesn't work because multiple requests share OS threads. `ContextVar` is the Python 3.7+ async-safe equivalent — each async task (request) gets its own context copy automatically.
+
+**Usage:** `get_request_id()` is callable from anywhere in the call stack (routers, tools, email sender) and returns the ID for the current request. This enables cross-service trace correlation without a distributed tracing SDK.
+
+---
+
+### ADR-018: Fire-and-forget email with asyncio.create_task
+
+**Decision:** Email notifications after guide verification use `asyncio.get_event_loop().create_task(coro)` rather than `await`-ing them in the request handler.
+
+**Reasoning:** A failed email must never block or roll back a guide approval. The HTTP response should return immediately after the database mutation. The email is a best-effort side effect.
+
+**Known limitation:** If the API process crashes between creating the task and the coroutine completing, the email is silently dropped. For the current phase this is acceptable. When reliability requirements tighten, move to a Redis-backed job queue (ARQ) or a Supabase webhook trigger.
+
+---
+
+### ADR-019: Session persistence via expo-secure-store (not AsyncStorage)
+
+**Decision:** The Yatra `session_id` (and Supabase JWT) are stored in `expo-secure-store`, not `AsyncStorage`.
+
+**Reasoning:** `AsyncStorage` stores data as plain text in the app's sandbox — readable on non-jailbroken Android devices via ADB or on rooted iOS devices. `expo-secure-store` maps to the iOS Keychain / Android Keystore, which is hardware-backed on modern devices. The session_id itself is low-sensitivity (it's a server-side state reference), but the Supabase JWT is authentication-sensitive and must not be stored in plain text.
+
+**Trade-off:** `expo-secure-store` is slightly slower than `AsyncStorage` and has a value-size limit (~2KB on iOS). Both are fine for the tokens we store.
+
+---
+
+### ADR-020: Server Components + server-side admin client for NTB dashboard
+
+**Decision:** The NTB guide listing and detail pages are Next.js Server Components that call the FastAPI `/admin/*` endpoints server-side. No client-side data fetching for the guide table.
+
+**Reasoning:** The NTB dashboard is a low-traffic, high-privilege surface. Server Components eliminate client-side API key exposure (the admin JWT is read from cookies server-side and never included in the JS bundle). The `requireAdminToken()` helper redirects unauthenticated requests to `/login` before any data is fetched — a hard server-side auth gate.
+
+**`GuideVerificationPanel` exception:** The approve/reject interaction requires client-side state (dialog open/close, loading spinner, optimistic lock version tracking). This component is `"use client"` and fetches its own admin JWT from the Supabase client at submission time. The admin endpoint enforces its own role check — the client JWT is just a credential, not a trust boundary.
+
+---
+
 ## Pending Decisions (to be recorded as stages progress)
 
-- **ADR-014:** Supabase Realtime integration for the SOS feed (WebSocket vs. SSE vs. polling)
-- **ADR-015:** Offline-first strategy for the tourist mobile app (AsyncStorage queue vs. MMKV vs. SQLite)
-- **ADR-016:** Auth flow for guide and tourist signup (Supabase email/OTP vs. Google OAuth)
-- **ADR-017:** EAS Build + OTA update strategy for Expo apps
-- **ADR-018:** Trip planner agent design (whether to extend Yatra or build a separate LangGraph agent)
+- **ADR-021:** Supabase Realtime integration for the SOS feed (WebSocket vs. SSE vs. polling)
+- **ADR-022:** Offline-first strategy for the tourist mobile app (AsyncStorage queue vs. MMKV vs. SQLite)
+- **ADR-023:** EAS Build + OTA update strategy for Expo apps
+- **ADR-024:** Trip planner agent design (whether to extend Yatra or build a separate LangGraph agent)

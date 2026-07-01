@@ -12,9 +12,14 @@
  *   │  Text input + send button           │
  *   └─────────────────────────────────────┘
  *
- * The sidebar shows every registration field with a checkmark (done) or a
- * clock (pending), matching the system-prompt spec: "done/pending field
- * states, progress bar, and visible agent action tags."
+ * Session persistence:
+ *   The session_id is stored in expo-secure-store under SESSION_KEY so the guide
+ *   can restart the app mid-registration and resume exactly where they left off.
+ *   On mount we call greet with the stored session_id — the server is idempotent
+ *   and returns the current state without re-running the greeting node.
+ *   If registration is already complete (registration_complete=true in the greet
+ *   response), we skip the welcome animation and drop the guide into operational
+ *   mode immediately.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -30,12 +35,14 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import type { YatraChatResponse, YatraMessage, GuideRegistrationFields } from "@nepal-journey/types";
 import { yatraGreet, yatraChat } from "@/api/client";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const SESSION_ID = "guide-session-" + Date.now(); // TODO: persist in SecureStore
+/** SecureStore key for the persisted session_id. */
+const SESSION_KEY = "yatra_session_id";
 
 /** Human-readable label for each registration field. */
 const FIELD_LABELS: Record<keyof GuideRegistrationFields, string> = {
@@ -77,6 +84,16 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+}
+
+// ─── Session helpers ──────────────────────────────────────────────────────────
+
+async function loadOrCreateSessionId(): Promise<string> {
+  const stored = await SecureStore.getItemAsync(SESSION_KEY);
+  if (stored) return stored;
+  const fresh = `guide-session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await SecureStore.setItemAsync(SESSION_KEY, fresh);
+  return fresh;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -147,9 +164,10 @@ function Sidebar({
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // true until greet resolves
   const [fields, setFields] = useState<GuideRegistrationFields>({});
   const [progress, setProgress] = useState({ done: 0, total: 11 });
   const [registrationComplete, setRegistrationComplete] = useState(false);
@@ -159,29 +177,44 @@ export default function ChatScreen() {
   const appendMessage = useCallback((role: "user" | "assistant", content: string) => {
     setMessages((prev) => [
       ...prev,
-      { id: `${Date.now()}-${role}`, role, content },
+      { id: `${Date.now()}-${Math.random().toString(36).slice(2)}-${role}`, role, content },
     ]);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 100);
   }, []);
 
   const applyResponse = useCallback((res: YatraChatResponse) => {
     appendMessage("assistant", res.message);
+    if (res.fields) setFields(res.fields);
     setProgress(res.registration_progress);
     setRegistrationComplete(res.registration_complete);
-    if (res.agent_actions.length > 0) {
+    if (res.agent_actions?.length > 0) {
       setAgentActions((prev) => [...prev, ...res.agent_actions]);
     }
   }, [appendMessage]);
 
-  // Greet on mount
+  // Load or create session_id from SecureStore, then call greet (idempotent)
   useEffect(() => {
     void (async () => {
-      setLoading(true);
       try {
-        const res = await yatraGreet(SESSION_ID);
+        const sid = await loadOrCreateSessionId();
+        setSessionId(sid);
+
+        const res = await yatraGreet(sid);
         applyResponse(res);
-      } catch (e) {
-        appendMessage("assistant", "Namaste! I'm Yatra. (Could not connect to server — check your API URL.)");
+
+        // If registration was already complete when the guide re-opens the app,
+        // show a contextual welcome-back message rather than the full greeting.
+        if (res.registration_complete && res.message === "") {
+          appendMessage(
+            "assistant",
+            "Welcome back! Your registration is complete. How can I help you today?",
+          );
+        }
+      } catch {
+        appendMessage(
+          "assistant",
+          "Namaste! I'm Yatra. (Could not connect to server — check your connection.)",
+        );
       } finally {
         setLoading(false);
       }
@@ -190,19 +223,19 @@ export default function ChatScreen() {
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || !sessionId) return;
     setInput("");
     appendMessage("user", text);
     setLoading(true);
     try {
-      const res = await yatraChat(SESSION_ID, text);
+      const res = await yatraChat(sessionId, text);
       applyResponse(res);
-    } catch (e) {
+    } catch {
       appendMessage("assistant", "Sorry, something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [input, loading, appendMessage, applyResponse]);
+  }, [input, loading, sessionId, appendMessage, applyResponse]);
 
   return (
     <KeyboardAvoidingView
